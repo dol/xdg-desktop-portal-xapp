@@ -24,9 +24,12 @@
 
 /* Asks the user which of `sources` to share. Finishes with a GArray of
  * guint32 ScreenCastSource ids, or G_IO_ERROR_CANCELLED. At most one id is
- * returned unless `multiple`. `cancellable` dismisses the dialog. */
+ * returned unless `multiple`. `cancellable` dismisses the dialog. `capture`
+ * (may be NULL, must outlive the dialog) is used once to render a preview of
+ * each source. */
 void screencast_dialog_run_async (ExternalWindow *external_parent,
                                   GPtrArray *sources,
+                                  ScreenCastCapture *capture,
                                   gboolean multiple,
                                   GCancellable *cancellable,
                                   GAsyncReadyCallback callback,

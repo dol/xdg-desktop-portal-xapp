@@ -148,8 +148,56 @@ header_func (GtkListBoxRow *row, GtkListBoxRow *before, gpointer data)
   gtk_list_box_row_set_header (row, label);
 }
 
+#define THUMBNAIL_WIDTH 160
+#define THUMBNAIL_HEIGHT 90
+
+/* Grabs `source` once and fits it into THUMBNAIL_WIDTH x THUMBNAIL_HEIGHT.
+ * NULL when there is nothing to show (no capture, or the source is gone). */
+static GdkPixbuf *
+thumbnail_new (ScreenCastCapture *capture, const ScreenCastSource *source)
+{
+  gsize stride = (gsize) source->width * 4;
+  g_autofree guint8 *data = NULL;
+  cairo_surface_t *full, *thumb;
+  GdkPixbuf *pixbuf;
+  cairo_t *cr;
+  double scale;
+  int w, h;
+
+  if (!capture || source->width <= 0 || source->height <= 0)
+    return NULL;
+
+  data = g_try_malloc (stride * source->height);
+  if (!data || !screencast_capture_grab (capture, source, FALSE, data, stride, NULL))
+    return NULL;
+
+  /* Never enlarge: small windows keep their size */
+  scale = MIN (1.0, MIN ((double) THUMBNAIL_WIDTH / source->width,
+                         (double) THUMBNAIL_HEIGHT / source->height));
+  w = MAX (1, (int) (source->width * scale + 0.5));
+  h = MAX (1, (int) (source->height * scale + 0.5));
+
+  full = cairo_image_surface_create_for_data (data, CAIRO_FORMAT_RGB24,
+                                              source->width, source->height, stride);
+  thumb = cairo_image_surface_create (CAIRO_FORMAT_RGB24, w, h);
+
+  cr = cairo_create (thumb);
+  cairo_scale (cr, (double) w / source->width, (double) h / source->height);
+  cairo_set_source_surface (cr, full, 0, 0);
+  cairo_pattern_set_filter (cairo_get_source (cr), CAIRO_FILTER_GOOD);
+  cairo_paint (cr);
+  cairo_destroy (cr);
+
+  pixbuf = gdk_pixbuf_get_from_surface (thumb, 0, 0, w, h);
+
+  cairo_surface_destroy (full);
+  cairo_surface_destroy (thumb);
+
+  return pixbuf;
+}
+
 static GtkWidget *
-row_new (const ScreenCastSource *source)
+row_new (ScreenCastCapture *capture, const ScreenCastSource *source)
 {
   GtkWidget *row = gtk_list_box_row_new ();
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
@@ -160,7 +208,19 @@ row_new (const ScreenCastSource *source)
                                         "application-x-executable-symbolic", "application-x-executable", NULL };
   g_autoptr(GIcon) gicon = g_themed_icon_new_from_names ((char **) (source->type == SCREENCAST_SOURCE_MONITOR ?
                                                                     monitor_icons : window_icons), -1);
-  GtkWidget *icon = gtk_image_new_from_gicon (gicon, GTK_ICON_SIZE_LARGE_TOOLBAR);
+  g_autoptr(GdkPixbuf) thumbnail = thumbnail_new (capture, source);
+  GtkWidget *icon;
+
+  if (thumbnail)
+    {
+      icon = gtk_image_new_from_pixbuf (thumbnail);
+      gtk_widget_set_name (icon, "screencast-thumbnail");
+      gtk_widget_set_size_request (icon, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
+    }
+  else
+    {
+      icon = gtk_image_new_from_gicon (gicon, GTK_ICON_SIZE_LARGE_TOOLBAR);
+    }
   GtkWidget *name = gtk_label_new (source->name && *source->name ? source->name : _("Untitled"));
   g_autofree char *size_text = g_strdup_printf ("%d × %d", source->width, source->height);
   GtkWidget *size = gtk_label_new (size_text);
@@ -190,6 +250,7 @@ row_new (const ScreenCastSource *source)
 void
 screencast_dialog_run_async (ExternalWindow *external_parent,
                              GPtrArray *sources,
+                             ScreenCastCapture *capture,
                              gboolean multiple,
                              GCancellable *cancellable,
                              GAsyncReadyCallback callback,
@@ -246,7 +307,7 @@ screencast_dialog_run_async (ExternalWindow *external_parent,
                                    multiple ? GTK_SELECTION_MULTIPLE : GTK_SELECTION_SINGLE);
   gtk_list_box_set_header_func (GTK_LIST_BOX (p->list), header_func, NULL, NULL);
   for (i = 0; i < sources->len; i++)
-    gtk_container_add (GTK_CONTAINER (p->list), row_new (g_ptr_array_index (sources, i)));
+    gtk_container_add (GTK_CONTAINER (p->list), row_new (capture, g_ptr_array_index (sources, i)));
 
   scrolled = gtk_scrolled_window_new (NULL, NULL);
   gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolled), GTK_SHADOW_IN);

@@ -265,6 +265,7 @@ typedef struct
   Request *request;
   ScreenCastSession *session;
   GPtrArray *sources;
+  ScreenCastCapture *capture;   /* renders the picker previews; lives as long as the dialog */
   GCancellable *cancellable;
   ExternalWindow *external_parent;
   gboolean responded;
@@ -281,6 +282,7 @@ start_handle_free (StartHandle *h)
   g_object_unref (h->session);
   g_object_unref (h->cancellable);
   g_ptr_array_unref (h->sources);
+  screencast_capture_free (h->capture);
   g_free (h);
 }
 
@@ -447,6 +449,7 @@ handle_start (XdpImplScreenCast *object,
 {
   ScreenCastSession *session = lookup_screencast_session (arg_session_handle);
   g_autoptr(GError) error = NULL;
+  ScreenCastCapture *capture = NULL;
   GPtrArray *sources = NULL;
   StartHandle *h;
   GVariantBuilder empty;
@@ -454,19 +457,19 @@ handle_start (XdpImplScreenCast *object,
 
   if (session)
     {
-      ScreenCastCapture *capture = screencast_capture_x11_new (&error);
+      capture = screencast_capture_x11_new (&error);
 
       /* What can be offered right now, not what was selected earlier */
       types = session->selected_types & available_source_types ();
       if (capture && types)
         sources = screencast_capture_list_sources (capture, types);
-      screencast_capture_free (capture);
     }
 
   if (!sources || sources->len == 0)
     {
       if (sources)
         g_ptr_array_unref (sources);
+      screencast_capture_free (capture);
       g_variant_builder_init (&empty, G_VARIANT_TYPE_VARDICT);
       xdp_impl_screen_cast_complete_start (object, invocation, 2, g_variant_builder_end (&empty));
       return TRUE;
@@ -477,6 +480,7 @@ handle_start (XdpImplScreenCast *object,
   h->invocation = invocation;
   h->session = g_object_ref (session);
   h->sources = sources;
+  h->capture = capture;
   h->cancellable = g_cancellable_new ();
   h->request = request_new (g_dbus_method_invocation_get_sender (invocation), arg_app_id, arg_handle);
 
@@ -490,7 +494,7 @@ handle_start (XdpImplScreenCast *object,
   g_signal_connect (h->request, "handle-close", G_CALLBACK (handle_start_close), h);
   request_export (h->request, g_dbus_method_invocation_get_connection (invocation));
 
-  screencast_dialog_run_async (h->external_parent, h->sources, session->multiple,
+  screencast_dialog_run_async (h->external_parent, h->sources, h->capture, session->multiple,
                                h->cancellable, on_dialog_done, h);
 
   return TRUE;
