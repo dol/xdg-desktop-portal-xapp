@@ -123,7 +123,9 @@ sources = built_sources + files(
 )
 
 # Filled in as the screencast sources are added
-screencast_sources = files()
+screencast_sources = files(
+  'screencast/capture-x11.c',
+)
 
 if have_screencast
   deps += screencast_deps
@@ -147,3 +149,18 @@ executable(
   install: true,
   install_dir: libexecdir,
 )
+
+if have_screencast
+  xvfb_run = find_program('xvfb-run', required: false)
+  if xvfb_run.found()
+    test_capture = executable(
+      'test-capture',
+      files(top_srcdir / 'tests' / 'screencast' / 'test-capture.c')
+        + files('screencast/capture-x11.c'),
+      include_directories: include_directories('screencast', '.'),
+      dependencies: [dependency('glib-2.0')] + screencast_deps,
+    )
+    test('capture', xvfb_run,
+      args: ['-a', '-s', '-screen 0 800x600x24', test_capture])
+  endif
+endif
