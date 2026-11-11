@@ -87,7 +87,9 @@ screencast_compositing_watch (ScreenCastCompositingFunc func, gpointer user_data
   XFixesSelectSelectionInput (watch_dpy, DefaultRootWindow (watch_dpy),
                               XInternAtom (watch_dpy, name, False),
                               XFixesSetSelectionOwnerNotifyMask);
-  XFlush (watch_dpy);
+  /* Wait until the server has the registration: with only a flush, a change
+   * made by another client right after this call can be missed. */
+  XSync (watch_dpy, False);
 
   watch_source = g_unix_fd_add (ConnectionNumber (watch_dpy), G_IO_IN, on_watch_readable, NULL);
 }
