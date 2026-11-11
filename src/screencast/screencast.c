@@ -342,6 +342,7 @@ start_streams (StartHandle *h, GArray *ids)
       as = g_new0 (ActiveStream, 1);
       as->source = *picked;
       as->source.name = g_strdup (picked->name);
+      as->source.app_id = NULL;
 
       as->capture = screencast_capture_x11_new (&error);
       if (as->capture)

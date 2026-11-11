@@ -62,6 +62,7 @@ screencast_source_free (ScreenCastSource *source)
     return;
 
   g_free (source->name);
+  g_free (source->app_id);
   g_free (source);
 }
 
@@ -321,6 +322,26 @@ window_title (X11Capture *c, Window w)
   return title ? title : g_strdup ("");
 }
 
+/* The WM_CLASS class name, e.g. "Firefox", used to find the application icon */
+static char *
+window_class (X11Capture *c, Window w)
+{
+  XClassHint hint = { NULL, NULL };
+  char *class_name = NULL;
+
+  trap_push (c->dpy);
+  if (XGetClassHint (c->dpy, w, &hint))
+    class_name = g_strdup (hint.res_class);
+  trap_pop (c->dpy);
+
+  if (hint.res_name)
+    XFree (hint.res_name);
+  if (hint.res_class)
+    XFree (hint.res_class);
+
+  return class_name;
+}
+
 static gboolean
 window_is_shareable (X11Capture *c, Window w)
 {
@@ -375,6 +396,7 @@ list_windows (X11Capture *c, GPtrArray *out)
       Window w = ((Window *) data)[i];
       XWindowAttributes attrs;
       g_autofree char *title = NULL;
+      ScreenCastSource *source;
 
       trap_push (c->dpy);
       if (window_is_shareable (c, w) && XGetWindowAttributes (c->dpy, w, &attrs))
@@ -382,8 +404,10 @@ list_windows (X11Capture *c, GPtrArray *out)
       if (trap_pop (c->dpy) != 0 || !title)
         continue;
 
-      g_ptr_array_add (out, source_new (w, SCREENCAST_SOURCE_WINDOW, title,
-                                        attrs.x, attrs.y, attrs.width, attrs.height));
+      source = source_new (w, SCREENCAST_SOURCE_WINDOW, title,
+                            attrs.x, attrs.y, attrs.width, attrs.height);
+      source->app_id = window_class (c, w);
+      g_ptr_array_add (out, source);
     }
 
   XFree (data);

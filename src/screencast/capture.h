@@ -30,6 +30,7 @@ typedef struct
   guint32 id;                   /* CRTC id for monitors, XID for windows */
   ScreenCastSourceType type;
   char *name;
+  char *app_id;                 /* WM_CLASS class of a window, or NULL */
   gint x, y, width, height;
 } ScreenCastSource;
 

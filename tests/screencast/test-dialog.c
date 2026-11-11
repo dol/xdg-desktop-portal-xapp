@@ -44,11 +44,11 @@ find_dialog (void)
 }
 
 static GtkWidget *
-find_list (GtkWidget *w)
+find_list (GtkWidget *w) /* the flow box of cards */
 {
   GtkWidget *found = NULL;
 
-  if (GTK_IS_LIST_BOX (w))
+  if (GTK_IS_FLOW_BOX (w))
     return w;
 
   if (GTK_IS_CONTAINER (w))
@@ -150,7 +150,7 @@ test_rows_show_scaled_thumbnails (void)
   ScreenCastCapture fake = { .grab = red_grab };
   Result r = { 0 };
   GtkWidget *dialog = start_dialog_with (sources, &fake, FALSE, NULL, &r);
-  int expected_w[] = { 160, 160, 120 };  /* 16:9, 16:9, 4:3 fitted into 160x90 */
+  int expected_w[] = { 240, 240, 180 };  /* 16:9, 16:9, 4:3 fitted into 240x135 */
   guint i;
 
   collect_thumbnails (dialog, thumbs);
@@ -163,9 +163,9 @@ test_rows_show_scaled_thumbnails (void)
 
       g_assert_nonnull (pb);
       g_assert_cmpint (gdk_pixbuf_get_width (pb), ==, expected_w[i]);
-      g_assert_cmpint (gdk_pixbuf_get_height (pb), ==, 90);
+      g_assert_cmpint (gdk_pixbuf_get_height (pb), ==, 135);
 
-      center = gdk_pixbuf_get_pixels (pb) + 45 * gdk_pixbuf_get_rowstride (pb) +
+      center = gdk_pixbuf_get_pixels (pb) + 67 * gdk_pixbuf_get_rowstride (pb) +
                (expected_w[i] / 2) * gdk_pixbuf_get_n_channels (pb);
       g_assert_cmpuint (center[0], ==, 0xff);  /* R */
       g_assert_cmpuint (center[1], ==, 0x00);
@@ -197,7 +197,7 @@ test_failed_grab_still_lists_sources_without_thumbnail (void)
 
   collect_thumbnails (dialog, thumbs);
   g_assert_cmpuint (thumbs->len, ==, 0);
-  g_assert_nonnull (gtk_list_box_get_row_at_index (GTK_LIST_BOX (list), 2));
+  g_assert_nonnull (gtk_flow_box_get_child_at_index (GTK_FLOW_BOX (list), 2));
 
   gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
   spin_until (&r.done);
@@ -217,10 +217,75 @@ test_default_size_fits_previews_within_screen (void)
   gdk_monitor_get_workarea (gdk_display_get_monitor (gdk_display_get_default (), 0), &area);
 
   /* A 160px preview plus the text needs more than the old 420px */
-  g_assert_cmpint (w, >=, 560);
+  g_assert_cmpint (w, >=, 600);
   g_assert_cmpint (w, <=, area.width);
   g_assert_cmpint (h, <=, area.height);
   g_assert_cmpint (h, >=, 300);
+
+  gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+  spin_until (&r.done);
+  g_error_free (r.error);
+}
+
+static void
+test_cards_are_two_per_row (void)
+{
+  g_autoptr(GPtrArray) sources = make_sources ();
+  Result r = { 0 };
+  GtkWidget *dialog = start_dialog (sources, FALSE, NULL, &r);
+  GtkWidget *box = find_list (dialog);
+
+  g_assert_true (GTK_IS_FLOW_BOX (box));
+  g_assert_cmpuint (gtk_flow_box_get_min_children_per_line (GTK_FLOW_BOX (box)), ==, 2);
+  g_assert_cmpuint (gtk_flow_box_get_max_children_per_line (GTK_FLOW_BOX (box)), ==, 2);
+
+  gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+  spin_until (&r.done);
+  g_error_free (r.error);
+}
+
+static GtkWidget *
+find_named (GtkWidget *w, const char *name)
+{
+  GtkWidget *found = NULL;
+
+  if (g_strcmp0 (gtk_widget_get_name (w), name) == 0)
+    return w;
+
+  if (GTK_IS_CONTAINER (w))
+    {
+      GList *l, *children = gtk_container_get_children (GTK_CONTAINER (w));
+
+      for (l = children; l && !found; l = l->next)
+        found = find_named (l->data, name);
+      g_list_free (children);
+    }
+
+  return found;
+}
+
+static void
+test_window_card_shows_the_application_icon (void)
+{
+  g_autoptr(GPtrArray) sources = make_sources ();
+  Result r = { 0 };
+  GtkWidget *dialog, *box, *window_card, *icon;
+  GIcon *gicon;
+  const char * const *names;
+
+  /* "Terminal" (index 2) belongs to an app known by its StartupWMClass */
+  ((ScreenCastSource *) g_ptr_array_index (sources, 2))->app_id = g_strdup ("XappTestTerm");
+
+  dialog = start_dialog (sources, FALSE, NULL, &r);
+  box = find_list (dialog);
+  window_card = GTK_WIDGET (gtk_flow_box_get_child_at_index (GTK_FLOW_BOX (box), 2));
+  icon = find_named (window_card, "screencast-app-icon");
+
+  g_assert_nonnull (icon);
+  gtk_image_get_gicon (GTK_IMAGE (icon), &gicon, NULL);
+  g_assert_true (G_IS_THEMED_ICON (gicon));
+  names = g_themed_icon_get_names (G_THEMED_ICON (gicon));
+  g_assert_cmpstr (names[0], ==, "xapp-test-term-icon");
 
   gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
   spin_until (&r.done);
@@ -254,7 +319,7 @@ test_single_select_returns_one_id (void)
   g_assert_nonnull (list);
   g_assert_false (gtk_widget_get_sensitive (share));
 
-  gtk_list_box_select_row (GTK_LIST_BOX (list), gtk_list_box_get_row_at_index (GTK_LIST_BOX (list), 1));
+  gtk_flow_box_select_child (GTK_FLOW_BOX (list), gtk_flow_box_get_child_at_index (GTK_FLOW_BOX (list), 1));
   g_assert_true (gtk_widget_get_sensitive (share));
 
   gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
@@ -274,8 +339,8 @@ test_multiple_select_returns_all_selected (void)
   GtkWidget *dialog = start_dialog (sources, TRUE, NULL, &r);
   GtkWidget *list = find_list (dialog);
 
-  gtk_list_box_select_row (GTK_LIST_BOX (list), gtk_list_box_get_row_at_index (GTK_LIST_BOX (list), 0));
-  gtk_list_box_select_row (GTK_LIST_BOX (list), gtk_list_box_get_row_at_index (GTK_LIST_BOX (list), 2));
+  gtk_flow_box_select_child (GTK_FLOW_BOX (list), gtk_flow_box_get_child_at_index (GTK_FLOW_BOX (list), 0));
+  gtk_flow_box_select_child (GTK_FLOW_BOX (list), gtk_flow_box_get_child_at_index (GTK_FLOW_BOX (list), 2));
 
   gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
   spin_until (&r.done);
@@ -303,9 +368,33 @@ test_cancellable_dismisses_dialog (void)
   g_assert_null (find_dialog ());
 }
 
+static void
+install_fake_desktop_entry (void)
+{
+  g_autofree char *dir = g_dir_make_tmp ("xapp-dialog-test-XXXXXX", NULL);
+  g_autofree char *apps = g_build_filename (dir, "applications", NULL);
+  g_autofree char *file = g_build_filename (apps, "xapp-test-term.desktop", NULL);
+
+  g_assert_cmpint (g_mkdir_with_parents (apps, 0700), ==, 0);
+  g_assert_true (g_file_set_contents (file,
+                                      "[Desktop Entry]\nType=Application\nName=Test Terminal\n"
+                                      "Exec=true\nIcon=xapp-test-term-icon\nStartupWMClass=XappTestTerm\n",
+                                      -1, NULL));
+
+  /* Before GIO reads the data dirs for the first time; keep the system ones
+   * so icon themes are still found */
+  {
+    g_autofree char *dirs = g_strdup_printf ("%s:%s", dir,
+                                             g_getenv ("XDG_DATA_DIRS") ? g_getenv ("XDG_DATA_DIRS") : "/usr/local/share:/usr/share");
+
+    g_setenv ("XDG_DATA_DIRS", dirs, TRUE);
+  }
+}
+
 int
 main (int argc, char **argv)
 {
+  install_fake_desktop_entry ();
   g_assert_true (gtk_init_check (&argc, &argv));
   g_test_init (&argc, &argv, NULL);
   g_unsetenv ("XAPP_SCREENCAST_TEST_AUTOPICK");
@@ -313,6 +402,8 @@ main (int argc, char **argv)
   g_test_add_func ("/dialog/thumbnails", test_rows_show_scaled_thumbnails);
   g_test_add_func ("/dialog/thumbnail_grab_fails", test_failed_grab_still_lists_sources_without_thumbnail);
   g_test_add_func ("/dialog/default_size", test_default_size_fits_previews_within_screen);
+  g_test_add_func ("/dialog/two_per_row", test_cards_are_two_per_row);
+  g_test_add_func ("/dialog/app_icon", test_window_card_shows_the_application_icon);
   g_test_add_func ("/dialog/cancel", test_cancel_gives_cancelled_error);
   g_test_add_func ("/dialog/single_select", test_single_select_returns_one_id);
   g_test_add_func ("/dialog/multiple_select", test_multiple_select_returns_all_selected);

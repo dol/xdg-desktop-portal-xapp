@@ -318,6 +318,7 @@ screencast_stream_new (ScreenCastCapture *c,
   s->capture = c;
   s->source = *source;
   s->source.name = g_strdup (source->name);
+  s->source.app_id = NULL;
   s->embed_cursor = embed_cursor;
   s->node_id = SPA_ID_INVALID;
 
