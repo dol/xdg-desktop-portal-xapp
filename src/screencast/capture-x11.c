@@ -21,7 +21,10 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Xatom.h>
 #include <X11/extensions/XShm.h>
+#include <X11/extensions/Xcomposite.h>
+#include <X11/extensions/Xfixes.h>
 #include <X11/extensions/Xrandr.h>
 
 #include "capture.h"
@@ -39,6 +42,9 @@ typedef struct
   XShmSegmentInfo shm;
   int image_width;
   int image_height;
+
+  /* Windows we redirected so their contents exist while obscured */
+  GHashTable *redirected;
 } X11Capture;
 
 G_DEFINE_QUARK (screencast-capture-error-quark, screencast_capture_error)
@@ -276,6 +282,212 @@ list_monitors (X11Capture *c, GPtrArray *out)
                                       DisplayHeight (c->dpy, c->screen)));
 }
 
+static char *
+window_title (X11Capture *c, Window w)
+{
+  Atom utf8 = XInternAtom (c->dpy, "UTF8_STRING", False);
+  Atom prop = XInternAtom (c->dpy, "_NET_WM_NAME", False);
+  Atom type;
+  int format;
+  unsigned long n, after;
+  unsigned char *data = NULL;
+  char *title = NULL;
+
+  if (XGetWindowProperty (c->dpy, w, prop, 0, 1024, False, utf8, &type, &format,
+                          &n, &after, &data) == Success && data)
+    {
+      if (type == utf8 && n > 0)
+        title = g_strndup ((char *) data, n);
+      XFree (data);
+    }
+
+  if (!title)
+    {
+      char *legacy = NULL;
+
+      if (XFetchName (c->dpy, w, &legacy) && legacy)
+        {
+          title = g_strdup (legacy);
+          XFree (legacy);
+        }
+    }
+
+  return title ? title : g_strdup ("");
+}
+
+static gboolean
+window_is_shareable (X11Capture *c, Window w)
+{
+  Atom type_prop = XInternAtom (c->dpy, "_NET_WM_WINDOW_TYPE", False);
+  Atom normal = XInternAtom (c->dpy, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+  Atom dialog = XInternAtom (c->dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
+  XWindowAttributes attrs;
+  Atom type;
+  int format;
+  unsigned long n, after, i;
+  unsigned char *data = NULL;
+  gboolean ok = TRUE;
+
+  if (!XGetWindowAttributes (c->dpy, w, &attrs) || attrs.map_state != IsViewable)
+    return FALSE;
+
+  if (XGetWindowProperty (c->dpy, w, type_prop, 0, 16, False, XA_ATOM, &type, &format,
+                          &n, &after, &data) == Success && data)
+    {
+      if (type == XA_ATOM && n > 0)
+        {
+          ok = FALSE;
+          for (i = 0; i < n; i++)
+            {
+              Atom a = ((Atom *) data)[i];
+
+              if (a == normal || a == dialog)
+                ok = TRUE;
+            }
+        }
+      XFree (data);
+    }
+
+  return ok;
+}
+
+static void
+list_windows (X11Capture *c, GPtrArray *out)
+{
+  Atom list_prop = XInternAtom (c->dpy, "_NET_CLIENT_LIST", False);
+  Atom type;
+  int format;
+  unsigned long n, after, i;
+  unsigned char *data = NULL;
+
+  if (XGetWindowProperty (c->dpy, c->root, list_prop, 0, 4096, False, XA_WINDOW,
+                          &type, &format, &n, &after, &data) != Success || !data)
+    return;
+
+  for (i = 0; type == XA_WINDOW && i < n; i++)
+    {
+      Window w = ((Window *) data)[i];
+      XWindowAttributes attrs;
+      g_autofree char *title = NULL;
+
+      trap_push (c->dpy);
+      if (window_is_shareable (c, w) && XGetWindowAttributes (c->dpy, w, &attrs))
+        title = window_title (c, w);
+      if (trap_pop (c->dpy) != 0 || !title)
+        continue;
+
+      g_ptr_array_add (out, source_new (w, SCREENCAST_SOURCE_WINDOW, title,
+                                        attrs.x, attrs.y, attrs.width, attrs.height));
+    }
+
+  XFree (data);
+}
+
+/* Draws the pointer image over dst, whose (0,0) is root coordinate (ox,oy) */
+static void
+embed_cursor_image (X11Capture *c, int ox, int oy, int width, int height,
+                    guint8 *dst, gsize stride)
+{
+  XFixesCursorImage *img = XFixesGetCursorImage (c->dpy);
+  int cx, cy, x, y;
+
+  if (!img)
+    return;
+
+  cx = img->x - img->xhot - ox;
+  cy = img->y - img->yhot - oy;
+
+  for (y = 0; y < img->height; y++)
+    {
+      for (x = 0; x < img->width; x++)
+        {
+          unsigned long argb = img->pixels[y * img->width + x];
+          guint8 a = (argb >> 24) & 0xff;
+          guint8 *px;
+          int dx = cx + x, dy = cy + y;
+
+          if (a == 0 || dx < 0 || dy < 0 || dx >= width || dy >= height)
+            continue;
+
+          /* Cursor pixels are premultiplied: out = src + dst * (1 - a) */
+          px = dst + dy * stride + dx * 4;
+          px[0] = (argb & 0xff) + px[0] * (255 - a) / 255;
+          px[1] = ((argb >> 8) & 0xff) + px[1] * (255 - a) / 255;
+          px[2] = ((argb >> 16) & 0xff) + px[2] * (255 - a) / 255;
+        }
+    }
+
+  XFree (img);
+}
+
+static gboolean
+grab_window (X11Capture *c, const ScreenCastSource *s, guint8 *dst, gsize stride,
+             int *origin_x, int *origin_y, GError **error)
+{
+  Window w = s->id;
+  Window child;
+  Pixmap pixmap;
+  Window root_ret;
+  int gx, gy, rx, ry;
+  unsigned int pw, ph, border, depth;
+  g_autofree guint8 *tmp = NULL;
+  gsize tmp_stride;
+  int row, code;
+
+  if (!g_hash_table_contains (c->redirected, GUINT_TO_POINTER (w)))
+    {
+      trap_push (c->dpy);
+      XCompositeRedirectWindow (c->dpy, w, CompositeRedirectAutomatic);
+      code = trap_pop (c->dpy);
+      if (code != 0)
+        goto gone;
+
+      g_hash_table_add (c->redirected, GUINT_TO_POINTER (w));
+    }
+
+  trap_push (c->dpy);
+  pixmap = XCompositeNameWindowPixmap (c->dpy, w);
+  if (XGetGeometry (c->dpy, pixmap, &root_ret, &gx, &gy, &pw, &ph, &border, &depth))
+    XTranslateCoordinates (c->dpy, w, c->root, 0, 0, &rx, &ry, &child);
+  code = trap_pop (c->dpy);
+
+  if (code != 0 || pw == 0 || ph == 0)
+    {
+      /* On an X error the pixmap id was never created */
+      if (code == 0)
+        XFreePixmap (c->dpy, pixmap);
+      goto gone;
+    }
+
+  /* The window may have been resized since the stream was sized: copy the
+   * overlap and leave the rest black. */
+  tmp_stride = pw * 4;
+  tmp = g_malloc (tmp_stride * ph);
+  if (!grab_drawable (c, pixmap, FALSE, 0, 0, pw, ph, tmp, tmp_stride, error))
+    {
+      XFreePixmap (c->dpy, pixmap);
+      return FALSE;
+    }
+  XFreePixmap (c->dpy, pixmap);
+
+  for (row = 0; row < s->height; row++)
+    {
+      memset (dst + row * stride, 0, s->width * 4);
+      if (row < (int) ph)
+        memcpy (dst + row * stride, tmp + row * tmp_stride, MIN (s->width, (int) pw) * 4);
+    }
+
+  *origin_x = rx;
+  *origin_y = ry;
+  return TRUE;
+
+gone:
+  g_hash_table_remove (c->redirected, GUINT_TO_POINTER (w));
+  g_set_error (error, SCREENCAST_CAPTURE_ERROR, SCREENCAST_CAPTURE_ERROR_SOURCE_GONE,
+               "Window 0x%lx is gone or cannot be captured", (unsigned long) w);
+  return FALSE;
+}
+
 static GPtrArray *
 x11_list_sources (ScreenCastCapture *base, guint types)
 {
@@ -284,6 +496,9 @@ x11_list_sources (ScreenCastCapture *base, guint types)
 
   if (types & SCREENCAST_SOURCE_MONITOR)
     list_monitors (c, out);
+
+  if (types & SCREENCAST_SOURCE_WINDOW)
+    list_windows (c, out);
 
   return out;
 }
@@ -297,21 +512,50 @@ x11_grab (ScreenCastCapture *base,
           GError **error)
 {
   X11Capture *c = (X11Capture *) base;
+  int ox, oy;
 
-  if (s->type != SCREENCAST_SOURCE_MONITOR)
+  if (s->type == SCREENCAST_SOURCE_MONITOR)
+    {
+      ox = s->x;
+      oy = s->y;
+
+      if (!grab_drawable (c, c->root, TRUE, s->x, s->y, s->width, s->height, dst, stride, error))
+        return FALSE;
+    }
+  else if (s->type == SCREENCAST_SOURCE_WINDOW)
+    {
+      if (!grab_window (c, s, dst, stride, &ox, &oy, error))
+        return FALSE;
+    }
+  else
     {
       g_set_error (error, SCREENCAST_CAPTURE_ERROR, SCREENCAST_CAPTURE_ERROR_FAILED,
                    "Unsupported source type %d", s->type);
       return FALSE;
     }
 
-  return grab_drawable (c, c->root, TRUE, s->x, s->y, s->width, s->height, dst, stride, error);
+  if (embed_cursor)
+    embed_cursor_image (c, ox, oy, s->width, s->height, dst, stride);
+
+  return TRUE;
 }
 
 static void
 x11_free (ScreenCastCapture *base)
 {
   X11Capture *c = (X11Capture *) base;
+
+  GHashTableIter iter;
+  gpointer key;
+
+  g_hash_table_iter_init (&iter, c->redirected);
+  while (g_hash_table_iter_next (&iter, &key, NULL))
+    {
+      trap_push (c->dpy);
+      XCompositeUnredirectWindow (c->dpy, (Window) GPOINTER_TO_UINT (key), CompositeRedirectAutomatic);
+      trap_pop (c->dpy);
+    }
+  g_hash_table_destroy (c->redirected);
 
   destroy_image (c);
   XCloseDisplay (c->dpy);
@@ -339,6 +583,7 @@ screencast_capture_x11_new (GError **error)
   c->screen = DefaultScreen (dpy);
   c->root = RootWindow (dpy, c->screen);
   c->have_shm = XShmQueryExtension (dpy);
+  c->redirected = g_hash_table_new (g_direct_hash, g_direct_equal);
 
   return &c->base;
 }

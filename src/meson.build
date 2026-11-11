@@ -125,6 +125,7 @@ sources = built_sources + files(
 # Filled in as the screencast sources are added
 screencast_sources = files(
   'screencast/capture-x11.c',
+  'screencast/compositing.c',
 )
 
 if have_screencast
@@ -156,7 +157,7 @@ if have_screencast
     test_capture = executable(
       'test-capture',
       files(top_srcdir / 'tests' / 'screencast' / 'test-capture.c')
-        + files('screencast/capture-x11.c'),
+        + files('screencast/capture-x11.c', 'screencast/compositing.c'),
       include_directories: include_directories('screencast', '.'),
       dependencies: [dependency('glib-2.0')] + screencast_deps,
     )
