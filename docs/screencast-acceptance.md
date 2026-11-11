@@ -22,12 +22,14 @@ meson test -C build-tests      # capture, stream, dialog, portal, smoke
 ## 2. Make the frontend see the backend (user level, reversible)
 
 ```sh
-mkdir -p ~/.local/share/xdg-desktop-portal/portals ~/.config/xdg-desktop-portal
-cp data/xapp-screencast.portal ~/.local/share/xdg-desktop-portal/portals/
+# `install -D` creates the missing directories, so each line stands on its own
+install -Dm644 data/xapp-screencast.portal \
+    ~/.local/share/xdg-desktop-portal/portals/xapp-screencast.portal
 
 # The system xfce-portals.conf prefers "wlr;gtk" for ScreenCast; prefer ours.
 # (A user file replaces the system one entirely, so copy it and change one line.)
-cp /usr/share/xdg-desktop-portal/xfce-portals.conf ~/.config/xdg-desktop-portal/
+install -Dm644 /usr/share/xdg-desktop-portal/xfce-portals.conf \
+    ~/.config/xdg-desktop-portal/xfce-portals.conf
 sed -i 's/^org.freedesktop.impl.portal.ScreenCast=.*/org.freedesktop.impl.portal.ScreenCast=xapp-screencast;/' \
     ~/.config/xdg-desktop-portal/xfce-portals.conf
 ```
