@@ -26,6 +26,28 @@ desktop_portal_dbus_interfaces += [
   top_srcdir / 'data' / 'org.freedesktop.impl.portal.Screenshot.xml',
 ]
 
+# ScreenCast needs PipeWire and the X11 extension libraries
+screencast_opt = get_option('screencast')
+screencast_deps = [
+  dependency('libpipewire-0.3', version: '>= 0.3.40', required: screencast_opt),
+  dependency('x11', required: screencast_opt),
+  dependency('xext', required: screencast_opt),
+  dependency('xcomposite', required: screencast_opt),
+  dependency('xdamage', required: screencast_opt),
+  dependency('xfixes', required: screencast_opt),
+  dependency('xrandr', required: screencast_opt),
+]
+have_screencast = true
+foreach d : screencast_deps
+  have_screencast = have_screencast and d.found()
+endforeach
+
+if have_screencast
+  desktop_portal_dbus_interfaces += [
+    desktop_portal_interfaces_dir / 'org.freedesktop.impl.portal.ScreenCast.xml',
+  ]
+endif
+
 built_sources = gnome.gdbus_codegen(
   'xdg-desktop-portal-dbus',
   sources: desktop_portal_dbus_interfaces,
@@ -70,6 +92,8 @@ config.set('HAVE_GTK_X11', gtk_x11_dep.found())
 gtk_wayland_dep = dependency('gtk+-wayland-3.0', required: false)
 config.set('HAVE_GTK_WAYLAND', gtk_wayland_dep.found())
 
+config.set('HAVE_SCREENCAST', have_screencast)
+
 built_sources += configure_file(output: 'config.h', configuration: config)
 
 deps = [
@@ -97,6 +121,14 @@ sources = built_sources + files(
   'wallpaperdialog.c',
   'xdg-desktop-portal-xapp.c',
 )
+
+# Filled in as the screencast sources are added
+screencast_sources = files()
+
+if have_screencast
+  deps += screencast_deps
+  sources += screencast_sources
+endif
 
 if gtk_x11_dep.found()
   deps += gtk_x11_dep

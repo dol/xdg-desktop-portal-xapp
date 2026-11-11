@@ -21,9 +21,9 @@ if dbus_service_dir == ''
   dbus_service_dir = datadir / 'dbus-1' / 'services'
 endif
 
+subdir('src')
 subdir('data')
 subdir('po')
-subdir('src')
 
 summary({
   'prefix': prefix,

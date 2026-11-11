@@ -7,3 +7,9 @@ option('systemduserunitdir',
   type: 'string',
   description: 'Directory for systemd user service files'
 )
+
+option('screencast',
+  type: 'feature',
+  value: 'auto',
+  description: 'Build the ScreenCast portal (X11 + PipeWire)'
+)

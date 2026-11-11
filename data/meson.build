@@ -7,6 +7,13 @@ install_data(
   install_dir: datadir / 'xdg-desktop-portal' / 'portals'
 )
 
+if have_screencast
+  install_data(
+    'xapp-screencast.portal',
+    install_dir: datadir / 'xdg-desktop-portal' / 'portals'
+  )
+endif
+
 # dbus service
 service_name = 'org.freedesktop.impl.portal.desktop.xapp'
 configure_file(
