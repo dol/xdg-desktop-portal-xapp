@@ -126,6 +126,7 @@ sources = built_sources + files(
 screencast_sources = files(
   'screencast/capture-x11.c',
   'screencast/compositing.c',
+  'screencast/stream.c',
 )
 
 if have_screencast
@@ -163,5 +164,17 @@ if have_screencast
     )
     test('capture', xvfb_run,
       args: ['-a', '-s', '-screen 0 800x600x24', test_capture])
+
+    with_pipewire = files(top_srcdir / 'tests' / 'screencast' / 'with-pipewire.sh')
+    test_stream = executable(
+      'test-stream',
+      files(top_srcdir / 'tests' / 'screencast' / 'test-stream.c')
+        + files('screencast/capture-x11.c', 'screencast/stream.c'),
+      include_directories: include_directories('screencast', '.'),
+      dependencies: [dependency('glib-2.0'), dependency('gio-2.0')] + screencast_deps,
+    )
+    test('stream', xvfb_run,
+      args: ['-a', '-s', '-screen 0 800x600x24', with_pipewire, test_stream],
+      timeout: 120)
   endif
 endif

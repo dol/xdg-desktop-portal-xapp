@@ -24,6 +24,7 @@
 #include <X11/Xatom.h>
 #include <X11/extensions/XShm.h>
 #include <X11/extensions/Xcomposite.h>
+#include <X11/extensions/Xdamage.h>
 #include <X11/extensions/Xfixes.h>
 #include <X11/extensions/Xrandr.h>
 
@@ -45,6 +46,11 @@ typedef struct
 
   /* Windows we redirected so their contents exist while obscured */
   GHashTable *redirected;
+
+  /* drawable -> Damage; drawable -> dirty flag (GINT_TO_POINTER (1)) */
+  int damage_event_base;
+  GHashTable *damages;
+  GHashTable *dirty;
 } X11Capture;
 
 G_DEFINE_QUARK (screencast-capture-error-quark, screencast_capture_error)
@@ -540,6 +546,99 @@ x11_grab (ScreenCastCapture *base,
   return TRUE;
 }
 
+static Drawable
+source_drawable (X11Capture *c, const ScreenCastSource *s)
+{
+  return s->type == SCREENCAST_SOURCE_WINDOW ? (Drawable) s->id : (Drawable) c->root;
+}
+
+static gboolean
+x11_refresh (ScreenCastCapture *base, ScreenCastSource *s)
+{
+  X11Capture *c = (X11Capture *) base;
+
+  if (s->type == SCREENCAST_SOURCE_MONITOR)
+    {
+      g_autoptr(GPtrArray) monitors = g_ptr_array_new_with_free_func ((GDestroyNotify) screencast_source_free);
+      guint i;
+
+      list_monitors (c, monitors);
+      for (i = 0; i < monitors->len; i++)
+        {
+          ScreenCastSource *m = g_ptr_array_index (monitors, i);
+
+          if (m->id == s->id)
+            {
+              s->x = m->x;
+              s->y = m->y;
+              s->width = m->width;
+              s->height = m->height;
+              return TRUE;
+            }
+        }
+
+      return FALSE;
+    }
+  else
+    {
+      XWindowAttributes attrs;
+      gboolean ok;
+
+      trap_push (c->dpy);
+      ok = XGetWindowAttributes (c->dpy, s->id, &attrs);
+      ok = trap_pop (c->dpy) == 0 && ok && attrs.map_state == IsViewable;
+
+      if (ok)
+        {
+          s->width = attrs.width;
+          s->height = attrs.height;
+        }
+
+      return ok;
+    }
+}
+
+static gboolean
+x11_poll_damage (ScreenCastCapture *base, const ScreenCastSource *s)
+{
+  X11Capture *c = (X11Capture *) base;
+  Drawable d = source_drawable (c, s);
+  gpointer key = GUINT_TO_POINTER (d);
+  GHashTableIter iter;
+  gpointer damage;
+
+  if (!g_hash_table_contains (c->damages, key))
+    {
+      Damage dmg;
+
+      trap_push (c->dpy);
+      dmg = XDamageCreate (c->dpy, d, XDamageReportNonEmpty);
+      if (trap_pop (c->dpy) == 0)
+        g_hash_table_insert (c->damages, key, GUINT_TO_POINTER (dmg));
+
+      return TRUE;
+    }
+
+  while (XPending (c->dpy))
+    {
+      XEvent ev;
+
+      XNextEvent (c->dpy, &ev);
+      if (ev.type == c->damage_event_base + XDamageNotify)
+        g_hash_table_insert (c->dirty, GUINT_TO_POINTER (((XDamageNotifyEvent *) &ev)->drawable),
+                             GINT_TO_POINTER (1));
+    }
+
+  /* Re-arm: NonEmpty reports only fire again after the region is subtracted */
+  trap_push (c->dpy);
+  g_hash_table_iter_init (&iter, c->damages);
+  while (g_hash_table_iter_next (&iter, NULL, &damage))
+    XDamageSubtract (c->dpy, (Damage) GPOINTER_TO_UINT (damage), None, None);
+  trap_pop (c->dpy);
+
+  return g_hash_table_remove (c->dirty, key);
+}
+
 static void
 x11_free (ScreenCastCapture *base)
 {
@@ -556,6 +655,16 @@ x11_free (ScreenCastCapture *base)
       trap_pop (c->dpy);
     }
   g_hash_table_destroy (c->redirected);
+
+  g_hash_table_iter_init (&iter, c->damages);
+  while (g_hash_table_iter_next (&iter, NULL, &key))
+    {
+      trap_push (c->dpy);
+      XDamageDestroy (c->dpy, (Damage) GPOINTER_TO_UINT (key));
+      trap_pop (c->dpy);
+    }
+  g_hash_table_destroy (c->damages);
+  g_hash_table_destroy (c->dirty);
 
   destroy_image (c);
   XCloseDisplay (c->dpy);
@@ -578,12 +687,17 @@ screencast_capture_x11_new (GError **error)
   c = g_new0 (X11Capture, 1);
   c->base.list_sources = x11_list_sources;
   c->base.grab = x11_grab;
+  c->base.refresh = x11_refresh;
+  c->base.poll_damage = x11_poll_damage;
   c->base.free = x11_free;
   c->dpy = dpy;
   c->screen = DefaultScreen (dpy);
   c->root = RootWindow (dpy, c->screen);
   c->have_shm = XShmQueryExtension (dpy);
   c->redirected = g_hash_table_new (g_direct_hash, g_direct_equal);
+  c->damages = g_hash_table_new (g_direct_hash, g_direct_equal);
+  c->dirty = g_hash_table_new (g_direct_hash, g_direct_equal);
+  XDamageQueryExtension (dpy, &c->damage_event_base, &(int){ 0 });
 
   return &c->base;
 }

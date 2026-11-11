@@ -46,6 +46,13 @@ struct _ScreenCastCapture
                     guint8 *dst,
                     gsize stride,
                     GError **error);
+  /* Updates the geometry of `s` in place. FALSE when the source is gone
+   * (window closed or unmapped, monitor removed). */
+  gboolean (*refresh) (ScreenCastCapture *c,
+                       ScreenCastSource *s);
+  /* TRUE if the source changed since the last call (always on the first) */
+  gboolean (*poll_damage) (ScreenCastCapture *c,
+                           const ScreenCastSource *s);
   void (*free) (ScreenCastCapture *c);
 };
 
@@ -78,6 +85,18 @@ screencast_capture_grab (ScreenCastCapture *c,
                          GError **error)
 {
   return c->grab (c, s, embed_cursor, dst, stride, error);
+}
+
+static inline gboolean
+screencast_capture_refresh (ScreenCastCapture *c, ScreenCastSource *s)
+{
+  return c->refresh (c, s);
+}
+
+static inline gboolean
+screencast_capture_poll_damage (ScreenCastCapture *c, const ScreenCastSource *s)
+{
+  return c->poll_damage (c, s);
 }
 
 static inline void
