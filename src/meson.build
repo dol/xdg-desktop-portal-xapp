@@ -154,6 +154,8 @@ executable(
   install_dir: libexecdir,
 )
 
+fs = import('fs')
+
 if have_screencast
   xvfb_run = find_program('xvfb-run', required: false)
   if xvfb_run.found()
@@ -202,6 +204,15 @@ if have_screencast
                meson.current_build_dir() / 'xdg-desktop-portal-xapp',
                files(top_srcdir / 'tests' / 'screencast' / 'client.py')],
         timeout: 180)
+
+      if fs.exists('/usr/libexec/xdg-desktop-portal') and find_program('xsetroot', required: false).found()
+        test('smoke', xvfb_run,
+          args: ['-a', '-s', '-screen 0 800x600x24', with_pipewire,
+                 files(top_srcdir / 'tests' / 'screencast' / 'smoke.sh'),
+                 meson.current_build_dir() / 'xdg-desktop-portal-xapp',
+                 top_srcdir / 'data'],
+          timeout: 180)
+      endif
     endif
   endif
 endif
