@@ -288,7 +288,21 @@ screencast_dialog_run_async (ExternalWindow *external_parent,
 
   p->dialog = gtk_dialog_new ();
   gtk_window_set_title (GTK_WINDOW (p->dialog), _("Share Your Screen"));
-  gtk_window_set_default_size (GTK_WINDOW (p->dialog), 420, 400);
+  {
+    /* Room for a 160px preview next to the title, but never taller than the screen */
+    GdkMonitor *monitor = gdk_display_get_primary_monitor (display);
+    GdkRectangle area = { 0, 0, 1024, 768 };
+    int width, height;
+
+    if (!monitor)
+      monitor = gdk_display_get_monitor (display, 0);
+    if (monitor)
+      gdk_monitor_get_workarea (monitor, &area);
+
+    width = MIN (600, area.width);
+    height = MAX (300, MIN (620, area.height * 8 / 10));
+    gtk_window_set_default_size (GTK_WINDOW (p->dialog), width, height);
+  }
   gtk_window_set_transient_for (GTK_WINDOW (p->dialog), GTK_WINDOW (p->fake_parent));
   gtk_window_set_modal (GTK_WINDOW (p->dialog), TRUE);
 

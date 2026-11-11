@@ -205,6 +205,29 @@ test_failed_grab_still_lists_sources_without_thumbnail (void)
 }
 
 static void
+test_default_size_fits_previews_within_screen (void)
+{
+  g_autoptr(GPtrArray) sources = make_sources ();
+  Result r = { 0 };
+  GtkWidget *dialog = start_dialog (sources, FALSE, NULL, &r);
+  GdkRectangle area;
+  int w, h;
+
+  gtk_window_get_default_size (GTK_WINDOW (dialog), &w, &h);
+  gdk_monitor_get_workarea (gdk_display_get_monitor (gdk_display_get_default (), 0), &area);
+
+  /* A 160px preview plus the text needs more than the old 420px */
+  g_assert_cmpint (w, >=, 560);
+  g_assert_cmpint (w, <=, area.width);
+  g_assert_cmpint (h, <=, area.height);
+  g_assert_cmpint (h, >=, 300);
+
+  gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+  spin_until (&r.done);
+  g_error_free (r.error);
+}
+
+static void
 test_cancel_gives_cancelled_error (void)
 {
   g_autoptr(GPtrArray) sources = make_sources ();
@@ -289,6 +312,7 @@ main (int argc, char **argv)
 
   g_test_add_func ("/dialog/thumbnails", test_rows_show_scaled_thumbnails);
   g_test_add_func ("/dialog/thumbnail_grab_fails", test_failed_grab_still_lists_sources_without_thumbnail);
+  g_test_add_func ("/dialog/default_size", test_default_size_fits_previews_within_screen);
   g_test_add_func ("/dialog/cancel", test_cancel_gives_cancelled_error);
   g_test_add_func ("/dialog/single_select", test_single_select_returns_one_id);
   g_test_add_func ("/dialog/multiple_select", test_multiple_select_returns_all_selected);
