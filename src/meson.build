@@ -179,6 +179,20 @@ if have_screencast
       args: ['-a', '-s', '-screen 0 800x600x24', with_pipewire, test_stream],
       timeout: 120)
 
+    test_dialog = executable(
+      'test-dialog',
+      files(top_srcdir / 'tests' / 'screencast' / 'test-dialog.c')
+        + files('screencast/screencastdialog.c', 'screencast/capture-x11.c', 'externalwindow.c')
+        + (gtk_x11_dep.found() ? files('externalwindow-x11.c') : [])
+        + (gtk_wayland_dep.found() ? files('externalwindow-wayland.c') : []),
+      include_directories: include_directories('screencast', '.'),
+      dependencies: [dependency('gtk+-3.0'), dependency('gio-2.0')] + screencast_deps
+        + (gtk_x11_dep.found() ? [gtk_x11_dep] : [])
+        + (gtk_wayland_dep.found() ? [gtk_wayland_dep] : []),
+    )
+    test('dialog', xvfb_run,
+      args: ['-a', '-s', '-screen 0 800x600x24', test_dialog])
+
     python = find_program('/usr/bin/python3', required: false)
     gdbus = find_program('gdbus', required: false)
     if python.found() and gdbus.found()
