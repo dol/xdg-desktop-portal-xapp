@@ -75,6 +75,45 @@ test_compositing_true_when_selection_owned (void)
   g_assert_false (screencast_compositing_active ());
 }
 
+static void
+on_compositing_changed (gboolean active, gpointer data)
+{
+  gint *state = data;
+
+  *state = active ? 1 : 0;
+}
+
+static void
+iterate_until (gint *state, gint wanted)
+{
+  gint64 deadline = g_get_monotonic_time () + 3 * G_USEC_PER_SEC;
+
+  while (*state != wanted && g_get_monotonic_time () < deadline)
+    g_main_context_iteration (NULL, FALSE);
+}
+
+static void
+test_compositing_watch_reports_changes (void)
+{
+  Window owner = XCreateSimpleWindow (dpy, DefaultRootWindow (dpy), 0, 0, 1, 1, 0, 0, 0);
+  Atom sel = XInternAtom (dpy, "_NET_WM_CM_S0", False);
+  gint state = -1;
+
+  screencast_compositing_watch (on_compositing_changed, &state);
+
+  XSetSelectionOwner (dpy, sel, owner, CurrentTime);
+  XSync (dpy, False);
+  iterate_until (&state, 1);
+  g_assert_cmpint (state, ==, 1);
+
+  XSetSelectionOwner (dpy, sel, None, CurrentTime);
+  XSync (dpy, False);
+  iterate_until (&state, 0);
+  g_assert_cmpint (state, ==, 0);
+
+  screencast_compositing_unwatch ();
+}
+
 static Window
 make_window (int x, int y, int w, int h, unsigned long colour, const char *title)
 {
@@ -226,6 +265,7 @@ main (int argc, char **argv)
   g_test_add_func ("/capture/monitor_grab", test_monitor_listed_and_grab_matches_root_colour);
   g_test_add_func ("/capture/compositing_false_without_manager", test_compositing_false_without_manager);
   g_test_add_func ("/capture/compositing_true_when_selection_owned", test_compositing_true_when_selection_owned);
+  g_test_add_func ("/capture/compositing_watch", test_compositing_watch_reports_changes);
   g_test_add_func ("/capture/window_grab_obscured", test_window_grab_of_obscured_window);
   g_test_add_func ("/capture/window_closed", test_window_closed_gives_source_gone);
   g_test_add_func ("/capture/cursor_embedded", test_cursor_embedded_changes_pixels);

@@ -52,6 +52,9 @@
 #include "screenshot.h"
 #include "settings.h"
 #include "wallpaper.h"
+#ifdef HAVE_SCREENCAST
+#include "screencast/screencast.h"
+#endif
 
 static GMainLoop *loop = NULL;
 static GHashTable *outstanding_handles = NULL;
@@ -155,6 +158,14 @@ on_bus_acquired (GDBusConnection *connection,
       g_warning ("error: %s\n", error->message);
       g_clear_error (&error);
     }
+
+#ifdef HAVE_SCREENCAST
+  if (XFCE_MODE && !screencast_init (connection, &error))
+    {
+      g_warning ("error: %s\n", error->message);
+      g_clear_error (&error);
+    }
+#endif
 }
 
 static void

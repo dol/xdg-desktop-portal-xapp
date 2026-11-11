@@ -21,3 +21,12 @@
 
 /* TRUE while a compositing manager owns _NET_WM_CM_S<screen> */
 gboolean screencast_compositing_active (void);
+
+typedef void (*ScreenCastCompositingFunc) (gboolean active,
+                                           gpointer user_data);
+
+/* Calls `func` from the main loop whenever a compositing manager appears or
+ * goes away. Only one watch exists at a time. */
+void screencast_compositing_watch (ScreenCastCompositingFunc func,
+                                   gpointer user_data);
+void screencast_compositing_unwatch (void);

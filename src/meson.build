@@ -127,6 +127,8 @@ screencast_sources = files(
   'screencast/capture-x11.c',
   'screencast/compositing.c',
   'screencast/stream.c',
+  'screencast/screencast.c',
+  'screencast/screencastdialog.c',
 )
 
 if have_screencast
@@ -176,5 +178,16 @@ if have_screencast
     test('stream', xvfb_run,
       args: ['-a', '-s', '-screen 0 800x600x24', with_pipewire, test_stream],
       timeout: 120)
+
+    python = find_program('/usr/bin/python3', required: false)
+    gdbus = find_program('gdbus', required: false)
+    if python.found() and gdbus.found()
+      test('portal', xvfb_run,
+        args: ['-a', '-s', '-screen 0 800x600x24', with_pipewire,
+               files(top_srcdir / 'tests' / 'screencast' / 'portal-test.sh'),
+               meson.current_build_dir() / 'xdg-desktop-portal-xapp',
+               files(top_srcdir / 'tests' / 'screencast' / 'client.py')],
+        timeout: 180)
+    endif
   endif
 endif
