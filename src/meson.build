@@ -214,6 +214,20 @@ if have_screencast
                  meson.current_build_dir() / 'xdg-desktop-portal-xapp',
                  top_srcdir / 'data'],
           timeout: 180)
+
+        test_window = executable(
+          'test-window',
+          files(top_srcdir / 'tests' / 'screencast' / 'test-window.c'),
+          dependencies: [dependency('x11')],
+        )
+        test('window_close', xvfb_run,
+          args: ['-a', '-s', '-screen 0 800x600x24', with_pipewire,
+                 files(top_srcdir / 'tests' / 'screencast' / 'smoke.sh'),
+                 meson.current_build_dir() / 'xdg-desktop-portal-xapp',
+                 top_srcdir / 'data',
+                 'window_close_client.py'],
+          env: {'XAPP_TEST_WINDOW_HELPER': meson.current_build_dir() / 'test-window'},
+          timeout: 180)
       endif
     endif
   endif

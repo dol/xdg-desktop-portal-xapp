@@ -1,11 +1,12 @@
 #!/bin/sh
 # Full-stack smoke test: Xvfb (from xvfb-run) + PipeWire + the xdg-desktop-portal
 # frontend + our backend, driven through the public ScreenCast API.
-# Usage (inside with-pipewire.sh): smoke.sh BACKEND_BINARY PORTALS_DIR
+# Usage (inside with-pipewire.sh): smoke.sh BACKEND_BINARY PORTALS_DIR [CLIENT.py]
 set -u
 
 BACKEND="$1"
 PORTALS_DIR="$2"
+CLIENT="${3:-smoke_client.py}"
 
 export XDG_CURRENT_DESKTOP=XFCE
 export XDG_DESKTOP_PORTAL_DIR="$PORTALS_DIR"
@@ -32,7 +33,7 @@ while [ $i -lt 50 ] && ! gdbus call --session --dest org.freedesktop.DBus --obje
   i=$((i + 1))
 done
 
-/usr/bin/python3 "$(dirname "$0")/smoke_client.py"
+cd "$(dirname "$0")" && /usr/bin/python3 "$CLIENT"
 RET=$?
 
 kill "$FRONTEND_PID" "$BACKEND_PID" 2>/dev/null
