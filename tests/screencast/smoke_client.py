@@ -26,7 +26,7 @@ def token():
     return f"smoke{os.getpid()}_{counter}"
 
 
-def request(method, args_before, options):
+def request(method, args_before, options, timeout=30):
     """Calls a Request-style method and returns (response, results)."""
     tok = token()
     options = dict(options, handle_token=GLib.Variant("s", tok))
@@ -39,7 +39,7 @@ def request(method, args_before, options):
 
     sub = bus.signal_subscribe(DEST, "org.freedesktop.portal.Request", "Response",
                                path, None, Gio.DBusSignalFlags.NONE, on_response, None)
-    GLib.timeout_add_seconds(30, loop.quit)
+    GLib.timeout_add_seconds(timeout, loop.quit)
     types = "".join(a[0] for a in args_before)
     bus.call_sync(DEST, PATH, IFACE, method,
                   GLib.Variant(f"({types}a{{sv}})", tuple(a[1] for a in args_before) + (options,)),

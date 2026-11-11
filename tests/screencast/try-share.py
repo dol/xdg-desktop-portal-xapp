@@ -29,7 +29,7 @@ if response != 0:
     sys.exit(f"SelectSources failed: {response}")
 
 print("Pick something in the dialog...")
-response, results = request("Start", [("o", session), ("s", "")], {})
+response, results = request("Start", [("o", session), ("s", "")], {}, timeout=300)
 if response == 1:
     sys.exit("Cancelled in the picker (response 1)")
 if response != 0:
