@@ -59,7 +59,7 @@ static gboolean
 pull_frames (guint32 node, int width, int height, int n)
 {
   /* Streams are created and destroyed one at a time, so the name is unique */
-  const char *target = "target-object=xapp-screencast";
+  char target[] = "target-object=xapp-screencast";
   g_autofree char *num = g_strdup_printf ("num-buffers=%d", n);
   g_autofree char *caps = g_strdup_printf ("video/x-raw,width=%d,height=%d", width, height);
   /* Browsers set media.type up front; pipewiresrc only does after negotiation,

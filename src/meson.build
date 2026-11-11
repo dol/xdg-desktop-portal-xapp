@@ -93,6 +93,7 @@ gtk_wayland_dep = dependency('gtk+-wayland-3.0', required: false)
 config.set('HAVE_GTK_WAYLAND', gtk_wayland_dep.found())
 
 config.set('HAVE_SCREENCAST', have_screencast)
+config.set('XAPP_SCREENCAST_TEST_HOOKS', have_screencast and get_option('screencast_test_hooks'))
 
 built_sources += configure_file(output: 'config.h', configuration: config)
 
@@ -197,7 +198,8 @@ if have_screencast
 
     python = find_program('/usr/bin/python3', required: false)
     gdbus = find_program('gdbus', required: false)
-    if python.found() and gdbus.found()
+    # These drive the real binary through the picker hook, so they need it compiled in
+    if python.found() and gdbus.found() and get_option('screencast_test_hooks')
       test('portal', xvfb_run,
         args: ['-a', '-s', '-screen 0 800x600x24', with_pipewire,
                files(top_srcdir / 'tests' / 'screencast' / 'portal-test.sh'),

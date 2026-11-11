@@ -22,6 +22,7 @@
 
 #include "screencastdialog.h"
 
+#ifdef XAPP_SCREENCAST_TEST_HOOKS
 static gboolean
 autopick_idle (gpointer data)
 {
@@ -43,6 +44,7 @@ autopick_idle (gpointer data)
   g_object_unref (task);
   return G_SOURCE_REMOVE;
 }
+#endif
 
 typedef struct
 {
@@ -197,12 +199,15 @@ screencast_dialog_run_async (ExternalWindow *external_parent,
 
   g_task_set_task_data (task, g_ptr_array_ref (sources), (GDestroyNotify) g_ptr_array_unref);
 
-  /* Test hook: never shown to users, only active when the harness sets it */
+#ifdef XAPP_SCREENCAST_TEST_HOOKS
+  /* Skips the consent dialog. Only compiled with -Dscreencast_test_hooks=true,
+   * which release builds must never use. */
   if (g_getenv ("XAPP_SCREENCAST_TEST_AUTOPICK"))
     {
       g_idle_add (autopick_idle, task);
       return;
     }
+#endif
 
   p = g_new0 (Picker, 1);
   p->task = task;

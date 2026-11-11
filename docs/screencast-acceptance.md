@@ -10,7 +10,13 @@ its build directory and replaces the packaged portal for as long as it runs.
 export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 meson setup build -Dscreencast=enabled -Dsystemduserunitdir=$HOME/.local/share/systemd/user
 ninja -C build
-meson test -C build            # automated suite: capture, stream, dialog, portal, smoke
+meson test -C build            # capture, stream, dialog
+
+# The portal and smoke tests skip the consent dialog through a test hook that is
+# only compiled in on request. Use a separate build directory, never ship it:
+meson setup build-tests -Dscreencast=enabled -Dscreencast_test_hooks=true \
+    -Dsystemduserunitdir=$HOME/.local/share/systemd/user
+meson test -C build-tests      # capture, stream, dialog, portal, smoke
 ```
 
 ## 2. Make the frontend see the backend (user level, reversible)

@@ -13,3 +13,9 @@ option('screencast',
   value: 'auto',
   description: 'Build the ScreenCast portal (X11 + PipeWire)'
 )
+
+option('screencast_test_hooks',
+  type: 'boolean',
+  value: false,
+  description: 'Compile test-only hooks that skip the ScreenCast consent dialog. Never enable in a release build.'
+)
