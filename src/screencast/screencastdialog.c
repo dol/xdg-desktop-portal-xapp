@@ -154,9 +154,13 @@ row_new (const ScreenCastSource *source)
   GtkWidget *row = gtk_list_box_row_new ();
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
   GtkWidget *text = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
-  GtkWidget *icon = gtk_image_new_from_icon_name (source->type == SCREENCAST_SOURCE_MONITOR ?
-                                                  "video-display-symbolic" : "window-symbolic",
-                                                  GTK_ICON_SIZE_LARGE_TOOLBAR);
+  /* Icon themes differ: list fallbacks so a missing name never shows as an error icon */
+  static const char *monitor_icons[] = { "video-display-symbolic", "video-display", "computer-symbolic", NULL };
+  static const char *window_icons[] = { "window-symbolic", "preferences-system-windows-symbolic",
+                                        "application-x-executable-symbolic", "application-x-executable", NULL };
+  g_autoptr(GIcon) gicon = g_themed_icon_new_from_names ((char **) (source->type == SCREENCAST_SOURCE_MONITOR ?
+                                                                    monitor_icons : window_icons), -1);
+  GtkWidget *icon = gtk_image_new_from_gicon (gicon, GTK_ICON_SIZE_LARGE_TOOLBAR);
   GtkWidget *name = gtk_label_new (source->name && *source->name ? source->name : _("Untitled"));
   g_autofree char *size_text = g_strdup_printf ("%d × %d", source->width, source->height);
   GtkWidget *size = gtk_label_new (size_text);
