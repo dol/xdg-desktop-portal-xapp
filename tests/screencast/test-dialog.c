@@ -88,6 +88,14 @@ spin_until (gboolean *flag)
     g_main_context_iteration (NULL, FALSE);
 }
 
+/* Runs pending events and idle work, e.g. progressively loaded thumbnails */
+static void
+drain (void)
+{
+  while (g_main_context_iteration (NULL, FALSE))
+    ;
+}
+
 static GtkWidget *
 start_dialog_with (GPtrArray *sources, ScreenCastCapture *capture, gboolean multiple, GCancellable *c, Result *r)
 {
@@ -153,6 +161,7 @@ test_rows_show_scaled_thumbnails (void)
   int expected_w[] = { 240, 240, 180 };  /* 16:9, 16:9, 4:3 fitted into 240x135 */
   guint i;
 
+  drain ();
   collect_thumbnails (dialog, thumbs);
   g_assert_cmpuint (thumbs->len, ==, 3);
 
@@ -195,6 +204,7 @@ test_failed_grab_still_lists_sources_without_thumbnail (void)
   GtkWidget *dialog = start_dialog_with (sources, &fake, FALSE, NULL, &r);
   GtkWidget *list = find_list (dialog);
 
+  drain ();
   collect_thumbnails (dialog, thumbs);
   g_assert_cmpuint (thumbs->len, ==, 0);
   g_assert_nonnull (gtk_flow_box_get_child_at_index (GTK_FLOW_BOX (list), 2));
@@ -286,6 +296,129 @@ test_window_card_shows_the_application_icon (void)
   g_assert_true (G_IS_THEMED_ICON (gicon));
   names = g_themed_icon_get_names (G_THEMED_ICON (gicon));
   g_assert_cmpstr (names[0], ==, "xapp-test-term-icon");
+
+  gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+  spin_until (&r.done);
+  g_error_free (r.error);
+}
+
+static int grab_calls;
+
+static gboolean
+counting_grab (ScreenCastCapture *c, const ScreenCastSource *s, gboolean embed_cursor,
+               guint8 *dst, gsize stride, GError **error)
+{
+  grab_calls++;
+  return red_grab (c, s, embed_cursor, dst, stride, error);
+}
+
+static void
+test_thumbnails_load_after_the_dialog_is_shown (void)
+{
+  g_autoptr(GPtrArray) sources = make_sources ();
+  ScreenCastCapture fake = { .grab = counting_grab };
+  Result r = { 0 };
+  GtkWidget *dialog;
+
+  grab_calls = 0;
+  screencast_dialog_run_async (NULL, sources, &fake, FALSE, NULL, on_done, &r);
+
+  /* Opening must not wait for 50 window grabs */
+  g_assert_cmpint (grab_calls, ==, 0);
+
+  dialog = find_dialog ();
+  while (!dialog)
+    {
+      g_main_context_iteration (NULL, FALSE);
+      dialog = find_dialog ();
+    }
+  drain ();
+  g_assert_cmpint (grab_calls, ==, 3);
+
+  gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+  spin_until (&r.done);
+  g_error_free (r.error);
+}
+
+static void
+test_closing_the_dialog_stops_loading_thumbnails (void)
+{
+  g_autoptr(GPtrArray) sources = make_sources ();
+  ScreenCastCapture fake = { .grab = counting_grab };
+  Result r = { 0 };
+  GtkWidget *dialog;
+
+  grab_calls = 0;
+  dialog = start_dialog_with (sources, &fake, FALSE, NULL, &r);
+  gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+  spin_until (&r.done);
+  g_error_free (r.error);
+
+  grab_calls = 0;
+  drain ();
+  g_assert_cmpint (grab_calls, ==, 0);
+}
+
+static gboolean
+card_visible (GtkWidget *box, int index)
+{
+  return gtk_widget_get_child_visible (GTK_WIDGET (gtk_flow_box_get_child_at_index (GTK_FLOW_BOX (box), index)));
+}
+
+static void
+test_search_filters_cards_by_title (void)
+{
+  g_autoptr(GPtrArray) sources = make_sources ();
+  Result r = { 0 };
+  GtkWidget *dialog = start_dialog (sources, FALSE, NULL, &r);
+  GtkWidget *box = find_list (dialog);
+  GtkWidget *search = find_named (dialog, "screencast-search");
+
+  g_assert_nonnull (search);
+
+  gtk_entry_set_text (GTK_ENTRY (search), "TERM");   /* case-insensitive */
+  drain ();
+  g_assert_false (card_visible (box, 0));
+  g_assert_false (card_visible (box, 1));
+  g_assert_true (card_visible (box, 2));
+
+  gtk_entry_set_text (GTK_ENTRY (search), "nothing matches this");
+  drain ();
+  g_assert_false (card_visible (box, 2));
+
+  gtk_entry_set_text (GTK_ENTRY (search), "");
+  drain ();
+  g_assert_true (card_visible (box, 0));
+  g_assert_true (card_visible (box, 1));
+  g_assert_true (card_visible (box, 2));
+
+  gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+  spin_until (&r.done);
+  g_error_free (r.error);
+}
+
+static void
+test_filtered_out_selection_is_dropped (void)
+{
+  g_autoptr(GPtrArray) sources = make_sources ();
+  Result r = { 0 };
+  GtkWidget *dialog = start_dialog (sources, FALSE, NULL, &r);
+  GtkWidget *box = find_list (dialog);
+  GtkWidget *search = find_named (dialog, "screencast-search");
+  GtkWidget *share = gtk_dialog_get_widget_for_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
+  GList *selected;
+
+  gtk_flow_box_select_child (GTK_FLOW_BOX (box), gtk_flow_box_get_child_at_index (GTK_FLOW_BOX (box), 0));
+  g_assert_true (gtk_widget_get_sensitive (share));
+
+  /* The selected card (index 0) no longer matches: it must not stay selected
+   * where it cannot be seen, or Share would send an invisible source. */
+  gtk_entry_set_text (GTK_ENTRY (search), "term");
+  drain ();
+
+  selected = gtk_flow_box_get_selected_children (GTK_FLOW_BOX (box));
+  g_assert_null (selected);
+  g_assert_false (gtk_widget_get_sensitive (share));
 
   gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
   spin_until (&r.done);
@@ -404,6 +537,10 @@ main (int argc, char **argv)
   g_test_add_func ("/dialog/default_size", test_default_size_fits_previews_within_screen);
   g_test_add_func ("/dialog/two_per_row", test_cards_are_two_per_row);
   g_test_add_func ("/dialog/app_icon", test_window_card_shows_the_application_icon);
+  g_test_add_func ("/dialog/lazy_thumbnails", test_thumbnails_load_after_the_dialog_is_shown);
+  g_test_add_func ("/dialog/closing_stops_loading", test_closing_the_dialog_stops_loading_thumbnails);
+  g_test_add_func ("/dialog/search_filters", test_search_filters_cards_by_title);
+  g_test_add_func ("/dialog/search_drops_hidden_selection", test_filtered_out_selection_is_dropped);
   g_test_add_func ("/dialog/cancel", test_cancel_gives_cancelled_error);
   g_test_add_func ("/dialog/single_select", test_single_select_returns_one_id);
   g_test_add_func ("/dialog/multiple_select", test_multiple_select_returns_all_selected);

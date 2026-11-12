@@ -54,6 +54,11 @@ typedef struct
   GtkWidget *dialog;
   GtkWidget *list;
   GtkWidget *share_button;
+  GtkWidget *search;
+  GPtrArray *cards;
+  guint next_card;
+  guint loader_id;
+  ScreenCastCapture *capture;
   GtkWidget *fake_parent;
   ExternalWindow *external_parent;
   GCancellable *cancellable;
@@ -72,6 +77,9 @@ picker_free (Picker *p)
   g_object_unref (p->fake_parent);
   g_clear_object (&p->external_parent);
   g_clear_object (&p->cancellable);
+  if (p->loader_id)
+    g_source_remove (p->loader_id);
+  g_ptr_array_unref (p->cards);
   g_object_unref (p->task);
   g_free (p);
 }
@@ -110,6 +118,70 @@ on_cancelled (GCancellable *cancellable, Picker *p)
    * cancellable's lock; it only ever fires once. */
   p->cancelled_id = 0;
   gtk_dialog_response (GTK_DIALOG (p->dialog), GTK_RESPONSE_CANCEL);
+}
+
+static GdkPixbuf *thumbnail_new (ScreenCastCapture *capture, const ScreenCastSource *source);
+
+static gboolean
+card_matches (GtkFlowBoxChild *child, Picker *p)
+{
+  const char *needle = gtk_entry_get_text (GTK_ENTRY (p->search));
+  const char *haystack = g_object_get_data (G_OBJECT (child), "search-text");
+  g_autofree char *folded = NULL;
+
+  if (!*needle)
+    return TRUE;
+
+  folded = g_utf8_casefold (needle, -1);
+  return haystack && strstr (haystack, folded) != NULL;
+}
+
+static gboolean
+filter_func (GtkFlowBoxChild *child, gpointer data)
+{
+  return card_matches (child, data);
+}
+
+static void
+on_search_changed (GtkEditable *entry, Picker *p)
+{
+  GList *selected, *l;
+
+  gtk_flow_box_invalidate_filter (GTK_FLOW_BOX (p->list));
+
+  /* A hidden card must never stay selected: Share would send an invisible source */
+  selected = gtk_flow_box_get_selected_children (GTK_FLOW_BOX (p->list));
+  for (l = selected; l; l = l->next)
+    if (!card_matches (l->data, p))
+      gtk_flow_box_unselect_child (GTK_FLOW_BOX (p->list), l->data);
+  g_list_free (selected);
+}
+
+/* One thumbnail per idle iteration, so opening never waits for every grab */
+static gboolean
+load_next_thumbnail (gpointer data)
+{
+  Picker *p = data;
+  GtkWidget *card, *preview;
+  g_autoptr(GdkPixbuf) pixbuf = NULL;
+
+  if (p->next_card >= p->cards->len)
+    {
+      p->loader_id = 0;
+      return G_SOURCE_REMOVE;
+    }
+
+  card = g_ptr_array_index (p->cards, p->next_card++);
+  preview = g_object_get_data (G_OBJECT (card), "preview");
+  pixbuf = thumbnail_new (p->capture, g_object_get_data (G_OBJECT (card), "source"));
+
+  if (pixbuf)
+    {
+      gtk_image_set_from_pixbuf (GTK_IMAGE (preview), pixbuf);
+      gtk_widget_set_name (preview, "screencast-thumbnail");
+    }
+
+  return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -220,7 +292,7 @@ app_icon_for_class (const char *wm_class)
 }
 
 static GtkWidget *
-card_new (ScreenCastCapture *capture, const ScreenCastSource *source)
+card_new (const ScreenCastSource *source)
 {
   GtkWidget *card = gtk_flow_box_child_new ();
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
@@ -233,7 +305,6 @@ card_new (ScreenCastCapture *capture, const ScreenCastSource *source)
     app_icon_for_class (source->app_id) : NULL;
   g_autoptr(GIcon) fallback = g_themed_icon_new_from_names ((char **) (source->type == SCREENCAST_SOURCE_MONITOR ?
                                                                        monitor_icons : window_icons), -1);
-  g_autoptr(GdkPixbuf) thumbnail = thumbnail_new (capture, source);
   g_autofree char *title = NULL;
   GtkWidget *icon, *label, *preview;
 
@@ -253,16 +324,8 @@ card_new (ScreenCastCapture *capture, const ScreenCastSource *source)
   gtk_label_set_max_width_chars (GTK_LABEL (label), 24);
   gtk_widget_set_tooltip_text (label, title);
 
-  if (thumbnail)
-    {
-      preview = gtk_image_new_from_pixbuf (thumbnail);
-      gtk_widget_set_name (preview, "screencast-thumbnail");
-    }
-  else
-    {
-      /* Nothing to show (window gone or not capturable): keep the card size stable */
-      preview = gtk_image_new_from_gicon (fallback, GTK_ICON_SIZE_DIALOG);
-    }
+  /* The real preview is filled in later, one card at a time */
+  preview = gtk_image_new_from_gicon (fallback, GTK_ICON_SIZE_DIALOG);
   gtk_widget_set_size_request (preview, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
 
   gtk_box_pack_start (GTK_BOX (header), icon, FALSE, FALSE, 0);
@@ -274,6 +337,13 @@ card_new (ScreenCastCapture *capture, const ScreenCastSource *source)
   gtk_widget_show_all (card);
 
   g_object_set_data (G_OBJECT (card), "source-id", GUINT_TO_POINTER (source->id));
+  g_object_set_data (G_OBJECT (card), "preview", preview);
+  g_object_set_data (G_OBJECT (card), "source", (gpointer) source);
+  {
+    g_autofree char *haystack = g_strconcat (title, " ", source->app_id ? source->app_id : "", NULL);
+
+    g_object_set_data_full (G_OBJECT (card), "search-text", g_utf8_casefold (haystack, -1), g_free);
+  }
 
   return card;
 }
@@ -307,6 +377,8 @@ screencast_dialog_run_async (ExternalWindow *external_parent,
 
   p = g_new0 (Picker, 1);
   p->task = task;
+  p->capture = capture;
+  p->cards = g_ptr_array_new ();
   p->external_parent = external_parent ? g_object_ref (external_parent) : NULL;
   p->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
 
@@ -357,7 +429,20 @@ screencast_dialog_run_async (ExternalWindow *external_parent,
   gtk_flow_box_set_column_spacing (GTK_FLOW_BOX (p->list), 6);
   gtk_flow_box_set_activate_on_single_click (GTK_FLOW_BOX (p->list), FALSE);
   for (i = 0; i < sources->len; i++)
-    gtk_container_add (GTK_CONTAINER (p->list), card_new (capture, g_ptr_array_index (sources, i)));
+    {
+      GtkWidget *card = card_new (g_ptr_array_index (sources, i));
+
+      gtk_container_add (GTK_CONTAINER (p->list), card);
+      g_ptr_array_add (p->cards, card);
+    }
+
+  p->search = gtk_search_entry_new ();
+  gtk_widget_set_name (p->search, "screencast-search");
+  gtk_entry_set_placeholder_text (GTK_ENTRY (p->search), _("Search windows and screens"));
+  /* "changed", not the delayed "search-changed": filter on every keystroke */
+  g_signal_connect (p->search, "changed", G_CALLBACK (on_search_changed), p);
+  gtk_box_pack_start (GTK_BOX (content), p->search, FALSE, FALSE, 0);
+  gtk_flow_box_set_filter_func (GTK_FLOW_BOX (p->list), filter_func, p, NULL);
 
   scrolled = gtk_scrolled_window_new (NULL, NULL);
   gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolled), GTK_SHADOW_IN);
@@ -376,13 +461,15 @@ screencast_dialog_run_async (ExternalWindow *external_parent,
 
   /* A focused list box selects its first row: start with nothing chosen so
    * the user has to pick what they share. */
-  gtk_widget_grab_focus (cancel_button);
+  gtk_widget_grab_focus (p->search);
+  (void) cancel_button;
   gtk_flow_box_unselect_all (GTK_FLOW_BOX (p->list));
 
   if (p->external_parent)
     external_window_set_parent_of (p->external_parent, gtk_widget_get_window (p->dialog));
 
   gtk_window_present (GTK_WINDOW (p->dialog));
+  p->loader_id = g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, load_next_thumbnail, p, NULL);
 }
 
 GArray *
