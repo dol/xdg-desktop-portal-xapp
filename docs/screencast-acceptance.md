@@ -34,6 +34,30 @@ sed -i 's/^org.freedesktop.impl.portal.ScreenCast=.*/org.freedesktop.impl.portal
     ~/.config/xdg-desktop-portal/xfce-portals.conf
 ```
 
+## 2b. Start the built portal on demand (no sudo)
+
+A user unit with the same name replaces the packaged one, so D-Bus
+activation starts your build instead of `/usr/libexec/xdg-desktop-portal-xapp`:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cat >| ~/.config/systemd/user/xdg-desktop-portal-xapp.service <<EOF
+[Unit]
+Description=Portal service (XApp implementation, local build)
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.xapp
+ExecStart=$PWD/build/src/xdg-desktop-portal-xapp
+Restart=on-failure
+EOF
+systemctl --user daemon-reload
+systemctl --user restart xdg-desktop-portal-xapp
+```
+
+After each rebuild, run the last command again. Remove the unit file to go back
+to the packaged portal.
+
 ## 3. Run the built portal instead of the packaged one
 
 ```sh
